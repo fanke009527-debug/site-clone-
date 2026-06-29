@@ -24,7 +24,7 @@ Point it at a URL. Claude becomes a forensic web archivist — inspecting every 
 ## Installation
 
 ```bash
-git clone https://github.com/fanke009527-debug/site-clone-v1.0.2.git ~/.claude/skills/site-clone
+git clone https://github.com/fanke009527-debug/site-clone-.git ~/.claude/skills/site-clone
 ```
 
 Requires:
