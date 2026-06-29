@@ -1,11 +1,10 @@
 ---
 name: site-clone
 description: |
-  One-shot website cloning — navigate a URL, capture all assets (Performance API +
-  network log), exhaustive attribute rewriting (srcset/data-*/inline-styles/12+
-  patterns), UTF-8 verification, byte-level HTML comparison. Iterates until zero
-  console errors. Use when asked to "clone this site", "复刻这个网站", "save this
-  page offline", "mirror this page".
+  One-shot website cloning — navigate any URL, capture every asset, 
+  rewrite all paths to relative, and produce a byte-exact offline copy 
+  with zero console errors. Browser MCP agnostic — auto-detects available 
+  tools (bouncy, Playwright, Chrome MCP, etc.).
 triggers:
   - clone this site
   - 复刻网站
@@ -14,307 +13,175 @@ triggers:
   - 扒站
   - archive website
 allowed-tools:
-  - Bash
-  - PowerShell
   - Read
   - Write
   - Edit
-  - mcp__playwright__browser_navigate
-  - mcp__playwright__browser_network_requests
-  - mcp__playwright__browser_evaluate
-  - mcp__playwright__browser_snapshot
-  - mcp__playwright__browser_take_screenshot
-  - mcp__playwright__browser_console_messages
+  - Bash
+  - PowerShell
 ---
 
-# Site Clone — Optimized Website Mirroring Skill
+# Site Clone
 
-One-shot website cloning. Navigate → capture → download → rewrite → validate → fix → done.
-Produces a byte-exact offline copy with **zero console errors**.
+You are a forensic web archivist. Your job: capture a live website and produce a fully offline, byte-exact copy with zero console errors.
+
+This is not "wget with find-and-replace." You inspect, extract, download, rewrite, verify, and iterate until clean.
+
+## Browser Automation
+
+You need a browser MCP. Check which of these is available and use the first match:
+- bouncy (`mcp__bouncy__browse_*` / `mcp__bouncy__fetch`)
+- Playwright (`mcp__playwright__browser_*`)
+- Chrome MCP (`mcp__chrome__*`)
+- Puppeteer (`mcp__puppeteer__*`)
+
+If none are detected, tell the user and stop. You cannot clone without browser automation.
+
+## Guiding Principles
+
+**1. Completeness beats speed.**
+Every asset the page loads must be captured: images, fonts, CSS, JS, videos, audio, favicons, web manifests. If the browser loaded it, you download it. A clone that returns 404 for a font or logo is not a clone.
+
+**2. The DOM is ground truth, not network logs.**
+Network requests miss CSS `@font-face`, dynamic `import()`, web workers, and Shadow DOM assets. Enumerate assets from the rendered DOM tree and `performance.getEntriesByType('resource')` — not just the network tab.
+
+**3. Encoding is the silent killer.**
+Double-encoding or BOM corruption destroys CJK, emoji, and special characters without visible errors. Save with UTF-8 (no BOM) and verify immediately. This is the #1 cause of "it looks fine but the text is broken."
+
+**4. Rewrite exhaustively, then verify.**
+There are at least 12 places URLs can hide in HTML: `src`, `href`, `srcset`, `data-src`, `data-background`, `data-image`, `data-lazy`, `data-original`, `poster`, `content`, inline `url()`, `background-image`, JSON-LD, `<object> data`, `<source srcset>`, protocol-relative `//`. You must handle every one. Then scan for what you missed.
+
+**5. Validate, don't assume.**
+After downloading every asset and rewriting every path, start a local server, open the page in the browser, and read the console. Every 404 is a bug. Fix it. Repeat until there are zero genuine errors.
+
+**6. Dynamic content is dynamic — compare fairly.**
+When comparing original vs clone HTML, strip runtime attributes first: `data-v-*`, `data-*`, `style`, `class`, `id`, `aria-*`, `scoped`, `__hash`, `v-*`. These vary per render. The structural HTML should match.
 
 ## Workflow
 
-### Step 1: Capture (one pass)
+### Phase 1: Reconnaissance
 
-1. Navigate to the target URL with Playwright:
+Navigate to the target URL. Wait for lazy-loaded content (3–5 seconds — longer for video-heavy or infinite-scroll pages).
+
+Capture all of this in one pass:
+
+1. **Full-page screenshot** at current viewport. This is your visual reference.
+2. **Asset inventory** from Performance API:
    ```
-   mcp__playwright__browser_navigate → url
+   performance.getEntriesByType('resource').map(r => ({name: r.name, type: r.initiatorType}))
    ```
-2. Wait 3 seconds for lazy-loaded assets and route chunks to fire.
-3. Capture the **Performance API resource list** — this catches everything the browser actually loaded
-   (CSS `@font-face`, dynamic `import()`, web workers, Shadow DOM assets that network log misses):
-   ```
-   mcp__playwright__browser_evaluate → () => JSON.stringify(performance.getEntriesByType('resource').map(r => ({name: r.name, type: r.initiatorType, duration: Math.round(r.duration)})))
-   ```
-4. Capture ALL network requests as secondary source:
-   ```
-   mcp__playwright__browser_network_requests → static: true
-   ```
-5. Save the rendered HTML with Shadow DOM serialization:
-   ```
-   mcp__playwright__browser_evaluate → () => { const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { const container = document.createElement('template'); container.setAttribute('shadow-root',''); container.content.appendChild(el.shadowRoot.cloneNode(true)); el.appendChild(container); walk(el.shadowRoot); } } }; walk(document.documentElement); return '<!DOCTYPE html>\n' + document.documentElement.outerHTML; }
-   ```
-6. **Cross-reference**: Compare Performance API entries against network requests. Performance API is the
-   **ground truth** — any URL in Performance API but NOT in network requests is a dynamic/lazy asset
-   that must be downloaded.
+3. **DOM asset scan** — query every element that can reference external resources:
+   - `img[src]`, `img[srcset]`, `img[data-src]`, `img[data-lazy]`
+   - `video[src]`, `video[poster]`, `video source[src]`
+   - `audio[src]`, `audio source[src]`
+   - `link[rel=stylesheet][href]`, `link[rel~=icon][href]`, `link[rel=preload][href]`
+   - `script[src]`
+   - `source[src]`, `source[srcset]` (inside `<picture>`)
+   - `object[data]`, `embed[src]`
+   - All elements with inline `style` containing `url()` or `background-image`
+   - All elements with `data-src`, `data-background`, `data-image`, `data-original`, `data-lazy`, `data-thumb`, `data-poster`, `data-video`, `data-url`
+4. **Rendered HTML** — serialize the full DOM. If Shadow DOM is present, recursively serialize shadow roots into `<template shadow-root>` containers.
+5. **Cross-reference** — merge Performance API + DOM scan. Performance API catches what the DOM scan can't (dynamic imports, web workers, font-face). The union of both is your download list.
 
-### Step 2: Setup clone directory
+### Phase 2: Foundation
 
-Create the clone directory at `E:\Projects\claude-code\site-clones\{domain}\`:
+Create the clone directory structure:
 
-- Extract the URLʼs hostname (e.g. `example.com`) — this is `{domain}`
-- Parse the Performance API resource list to extract all unique directory paths
-- Create all needed subdirectories in one call:
+- Base: `./site-clones/{domain}/` (use the URL's hostname, no protocol)
+- Mirror the URL path structure of every asset you discovered
+- Create all subdirectories in one batch
 
-```powershell
-$dirs = @($assetPaths | ForEach-Object { Split-Path $_ -Parent } | Where-Object { $_ } | Sort-Object -Unique)
-$dirs | ForEach-Object { New-Item -ItemType Directory -Force -Path "E:\Projects\claude-code\site-clones\$domain\$_" }
-```
+Save the HTML:
 
-### Step 3: Save HTML with verified UTF-8 encoding
+- Write `index.html` with UTF-8 encoding (no BOM)
+- Immediately read it back and verify:
+  - Total byte count is ≥ 98% of the original (catch truncation)
+  - CJK characters survived (if the page had them)
+  - Emoji survived (if the page had them)
 
-Save the captured HTML with correct encoding — **this is the #1 silent failure point**:
+### Phase 3: Asset Acquisition
 
-```powershell
-$html = @" 
-<captured-html-content>
-"@
-$outPath = "E:\Projects\claude-code\site-clones\$domain\index.html"
-[System.IO.File]::WriteAllText($outPath, $html, [System.Text.UTF8Encoding]::new($false))
-```
+From your merged asset inventory, download every same-origin asset. External CDN URLs (fonts.googleapis.com, cdn.jsdelivr.net, etc.) stay as-is — the clone loads them from the CDN for fidelity.
 
-**Immediately verify encoding integrity:**
+Download in parallel batches of 4. For each asset:
+- Preserve the URL's path structure relative to the domain
+- Handle query strings (strip for the filename, but download with them)
+- Log failures — don't abort on a single failed download
 
-```powershell
-$saved = Get-Content $outPath -Raw -Encoding UTF8
-$hasCJK = $saved -match '[一-鿿]'
-Write-Host "UTF-8 check: $($hasCJK ? 'PASS - CJK preserved' : 'no CJK detected')"
-$hasEmoji = $saved -match '\p{So}'
-Write-Host "Emoji check: $($hasEmoji ? 'PASS' : 'no emoji detected')"
-if ($saved.Length -lt $html.Length * 0.98) { throw "HTML TRUNCATED: $($saved.Length) vs $($html.Length)" }
-```
+Files that return non-200 or timeout: record them for the manifest.
 
-### Step 4: Download all assets
+### Phase 4: Path Surgery
 
-Merge Performance API entries + network request URLs into a single deduplicated list.
-**Download from both sources — Performance API catches what network log misses.**
+Rewrite the HTML so every asset path points to the local copy. You must handle ALL of these:
 
-```powershell
-$allUrls = @($perfEntries | ForEach-Object { $_.name }) + @($networkUrls)
-$allUrls = $allUrls | Where-Object { $_ -match "^https?://$([regex]::Escape($domain))" } | Sort-Object -Unique
+| Pattern | Where it appears | Example |
+|---------|-----------------|---------|
+| `src="/..."` | img, script, iframe, input[type=image], track, source | `src="/images/hero.webp"` |
+| `href="/..."` | link, a, area, base | `href="/styles/main.css"` |
+| `srcset="/..."` | img, source (multi-URL, comma-separated, width descriptors) | `srcset="/a.jpg 1x, /b.jpg 2x"` |
+| `data-src="/..."` | img (lazy-load) | `data-src="/photos/card.jpg"` |
+| `data-background="/..."` | div, section (lazy background) | `data-background="/bg/hero.jpg"` |
+| `data-image="/..."` | various (custom lazy-load) | `data-image="/avatars/user.png"` |
+| `data-original="/..."` | img (legacy lazy-load) | `data-original="/gallery/1.jpg"` |
+| `data-lazy="/..."` | various | `data-lazy="/assets/banner.webp"` |
+| `poster="/..."` | video | `poster="/thumbs/video.jpg"` |
+| `content="/..."` | meta (OG/Twitter cards) | `content="https://domain/og.png"` |
+| `url(/...)` | inline styles, CSS | `background: url(/img/bg.jpg)` |
+| `url("/...")` | inline styles (quoted) | `background: url("/img/bg.jpg")` |
+| `//domain/...` | protocol-relative URLs | `//example.com/js/app.js` |
+| JSON-LD URLs | `<script type=application/ld+json>` | `"logo": "https://domain/logo.png"` |
+| `<object data="/...">` | object embeds | `data="/docs/manual.pdf"` |
+| `<source srcset="/...">` | picture > source | `<source srcset="/img@1x.webp 1x">` |
 
-foreach ($url in $allUrls) {
-    $relPath = $url -replace '^https?://' + [regex]::Escape($domain) + '/?', ''
-    if (-not $relPath) { $relPath = 'index.html' }
-    $outFile = "E:\Projects\claude-code\site-clones\$domain\$relPath"
-    $outDir = Split-Path $outFile -Parent
-    if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Force -Path $outDir }
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing -TimeoutSec 30
-    } catch {
-        Write-Host "WARN: Failed to download $url — $_"
-    }
-}
-```
+After rewriting:
+- Replace `https://{domain}/` and `http://{domain}/` with `./`
+- Replace `//{domain}/` with `./`
+- Leave external CDN URLs unchanged
+- Do NOT inject `<base href="./">` — it breaks pages with existing `<base>` tags
 
-### Step 5: Rewrite paths — exhaustive attribute coverage
+**Post-rewrite scan:** Grep the HTML for `https?://{domain}`. If any remain, examine them — each is either a missed pattern or an intentional external URL. Fix the misses.
 
-**Do NOT hardcode directory names.** Derive replacement patterns from the actual paths that
-were downloaded. Handle all 12+ attribute patterns that can contain URLs:
+### Phase 5: Verification Server
 
-```powershell
-$domain = "example.com"
-$html = [System.IO.File]::ReadAllText("$cloneDir\index.html", [System.Text.UTF8Encoding]::new($false))
+Start a local HTTP server serving the clone directory. Use Node.js `http` module (zero dependencies):
 
-# 1. Generic absolute-path replacement — handles ALL directories dynamically
-#    Matches: src="/anything/..."  href="/anything/..."  action="/anything/..."
-$html = $html -replace " (src|href|action|poster|data|cite|longdesc|profile|usemap|formaction|manifest)=""/", ' $1="./'
+- Port: any available port — try 8765, then 8766, then 8767
+- MIME types: at minimum handle html, htm, css, js, mjs, json, svg, xml, webp, png, jpg, jpeg, gif, ico, woff, woff2, ttf, eot, mp4, webm, mp3, wav, pdf, txt, vtt — all with correct charset where applicable
+- Security: reject `../` path traversal (403)
+- CORS: `Access-Control-Allow-Origin: *` (localhost testing)
+- Strip query strings and fragments from file resolution
 
-# 2. srcset attribute — handles multi-URL values like "/a.jpg 1x, /b.jpg 2x"
-$html = [regex]::Replace($html, '(srcset)="([^"]*)"', { param($m)
-    $val = [regex]::Replace($m.Groups[2].Value, '/([^\s,]+)', './$1')
-    return $m.Groups[1].Value + '="' + $val + '"'
-})
+### Phase 6: Zero-Error Loop
 
-# 3. Lazy-load data attributes — data-src, data-background, data-image, data-defer-src, data-lazy, data-original
-$html = $html -replace " (data-src|data-background|data-image|data-defer-src|data-lazy|data-original|data-thumb|data-poster|data-video|data-url)=""/", ' $1="./'
+Open the clone in the browser at `http://localhost:{port}/index.html`.
 
-# 4. <object> / <embed> data= attribute
-$html = $html -replace " (data)=""/([^""]+\.(svg|pdf|swf))", ' $1="./$2'
+Read all console messages. Filter out:
+- CORS preflight errors (`Access-Control-Allow-Origin`)
+- Mixed content warnings
+- SSL/certificate errors
+- "Slow network" font warnings
 
-# 5. <video>/<audio> <source src=> and <track src=>
-$html = $html -replace " (src)=""/([^""]+\.(mp4|webm|ogg|mp3|wav|vtt))", ' $1="./$2'
+What remains are **genuine errors**. For each 404 URL:
+1. Map it back to the original domain
+2. Download it (create parent directories if needed)
+3. Reload the page
 
-# 6. CSS url() in inline styles — url(/path...) → url(./path...)
-$html = $html -replace ":(\s*)url\(/(?![/])", ':$1url(./'
+Repeat until genuine console errors = 0.
 
-# 7. <link> href — stylesheets, favicons, canonical, preload, etc.
-$html = $html -replace " (href)=""/([^""]+\.(css|ico|png|svg|webp|json|xml|txt))", ' $1="./$2'
+### Phase 7: Manifest & Report
 
-# 8. Protocol-relative URLs (//example.com/...) → relative
-$html = $html -replace "//$([regex]::Escape($domain))/", './'
-
-# 9. <meta> content= URLs (Open Graph, Twitter Cards)
-$html = $html -replace " (content)=""https?://$([regex]::Escape($domain))/", ' $1="./'
-
-# 10. JSON-LD / schema.org inline URLs
-$html = $html -replace "(""url|""logo|""image|""thumbnailUrl|""contentUrl)"":\s*""https?://$([regex]::Escape($domain))/", '$1:"./'
-
-# 11. <source srcset> inside <picture> — same multi-URL handling as #2
-$html = [regex]::Replace($html, '<source\s+([^>]*\s)?(srcset)="([^"]*)"', { param($m)
-    $prefix = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { '' }
-    $val = [regex]::Replace($m.Groups[3].Value, '/([^\s,]+)', './$1')
-    return '<source ' + $prefix + 'srcset="' + $val + '"'
-})
-
-# 12. Inline background-image style with url()
-$html = $html -replace "background-image:\s*url\(/(?![/])", 'background-image: url(./'
-
-Write-Host "Path rewrite complete — 12 attribute patterns processed"
-[System.IO.File]::WriteAllText("$cloneDir\index.html", $html, [System.Text.UTF8Encoding]::new($false))
-```
-
-**Post-rewrite verification:**
-```powershell
-$remaining = Select-String -Path "$cloneDir\index.html" -Pattern "https?://$domain/" -AllMatches
-if ($remaining.Matches.Count -gt 0) {
-    Write-Host "WARN: $($remaining.Matches.Count) absolute URLs to $domain remain — may need manual review"
-    $remaining.Matches | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
-}
-```
-
-### Step 6: Byte-level HTML comparison
-
-Before starting the server, verify the rewrite didn't corrupt anything:
-
-```powershell
-# Strip dynamic runtime attributes from both versions for fair comparison
-$strip = { $_ -replace '\s+data-v-[a-f0-9]+=""', '' -replace '\s+data-.*?="[^""]*"', '' -replace '\s+style="[^""]*"', '' -replace '\s+class="[^""]*"', '' -replace '\s+id="[^""]*"', '' -replace '\s+aria-[^=]+="[^""]*"', '' -replace '\s+scoped=""', '' -replace '\s+data-v-[\w-]+', '' -replace '\s+__hash="[^""]*"', '' -replace '\s+v-\w+="[^""]*"', '' }
-
-$original = & $strip (Invoke-WebRequest -Uri $sourceUrl -UseBasicParsing).Content
-$cloned = & $strip (Get-Content "$cloneDir\index.html" -Raw -Encoding UTF8)
-
-if ($original.Length -eq 0) { throw "Failed to fetch original for comparison" }
-$ratio = [Math]::Min($original.Length, $cloned.Length) / [Math]::Max($original.Length, $cloned.Length)
-Write-Host "HTML byte ratio (stripped): $($ratio.ToString('P2'))"
-if ($ratio -lt 0.85) { Write-Host "WARN: Unexpected divergence < 85% — check for corruption" }
-if ($ratio -gt 0.99) { Write-Host "PASS: Byte-exact match after normalization" }
-```
-
-### Step 7: Start local verification server
-
-Node.js built-in `http` module — zero dependencies. **Works on both Windows and Unix:**
-
-```javascript
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const baseDir = __dirname;
-
-const mime = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm':  'text/html; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.js':   'application/javascript; charset=utf-8',
-  '.mjs':  'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg':  'image/svg+xml',
-  '.xml':  'application/xml; charset=utf-8',
-  '.webp': 'image/webp',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif':  'image/gif',
-  '.ico':  'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2':'font/woff2',
-  '.ttf':  'font/ttf',
-  '.eot':  'application/vnd.ms-fontobject',
-  '.mp4':  'video/mp4',
-  '.webm': 'video/webm',
-  '.mp3':  'audio/mpeg',
-  '.wav':  'audio/wav',
-  '.pdf':  'application/pdf',
-  '.txt':  'text/plain; charset=utf-8',
-  '.vtt':  'text/vtt; charset=utf-8',
-};
-
-http.createServer((req, res) => {
-  let filePath = req.url === '/' ? '/index.html' : req.url.split('?')[0].split('#')[0];
-  filePath = decodeURIComponent(filePath);
-  const fullPath = path.join(baseDir, filePath);
-
-  // Security: prevent directory traversal
-  if (!fullPath.startsWith(baseDir)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
-
-  fs.readFile(fullPath, (err, data) => {
-    if (err) {
-      res.writeHead(404);
-      res.end('Not Found');
-      return;
-    }
-    const ext = path.extname(fullPath).toLowerCase();
-    res.writeHead(200, {
-      'Content-Type': mime[ext] || 'application/octet-stream',
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-cache'
-    });
-    res.end(data);
-  });
-}).listen(8765, () => {
-  console.log('http://localhost:8765/');
-});
-```
-
-Save as `server.js` in the clone directory.
-
-**Start server (cross-platform):**
-- **Windows (PowerShell):** `Start-Process node -ArgumentList "server.js" -NoNewWindow`
-- **Linux/Mac (Bash):** `node server.js &`
-- Or unified: `node server.js` (in a separate terminal tab)
-
-### Step 8: Validate — Console Zero Error Loop
-
-1. Navigate Playwright to `http://localhost:8765/{page-path}`
-2. Wait 1 second for JavaScript execution
-3. Read console messages: `mcp__playwright__browser_console_messages → level: error`
-4. Filter out CORS errors (expected on localhost — these are NOT real errors):
-   - Ignore: `Access-Control-Allow-Origin`, `Mixed Content`, `ERR_SSL`
-5. Extract all genuine 404 URLs from the remaining errors
-6. For each 404 URL:
-   - Strip the `http://localhost:8765` prefix
-   - Reconstruct the original URL: `https://{domain}/{stripped-path}`
-   - Download from original domain into the clone directory
-7. Reload the page in Playwright
-8. Repeat until **genuine console errors = 0**
-9. Only "Slow network" font warnings are acceptable (not real errors)
-
-### Step 9: Generate manifest
-
-Write `site-manifest.json` to the clone directory:
+Generate `site-manifest.json`:
 
 ```json
 {
   "source": "{original_url}",
-  "cloned_at": "{ISO8601_timestamp}",
-  "version": "1.0.2",
+  "cloned_at": "{ISO8601}",
+  "version": "2.0.0",
   "total_files": N,
   "total_size_bytes": N,
   "total_size_human": "{X.Y MB}",
-  "pages": ["/index.html"],
   "assets": {
-    "images": N,
-    "fonts": N,
-    "scripts": N,
-    "styles": N,
-    "videos": N,
-    "audio": N,
-    "documents": N,
-    "other": N
+    "images": N, "fonts": N, "scripts": N, "styles": N,
+    "videos": N, "audio": N, "documents": N, "other": N
   },
   "validation": {
     "console_errors_final": 0,
@@ -325,26 +192,32 @@ Write `site-manifest.json` to the clone directory:
 }
 ```
 
-### Step 10: Screenshot comparison
+Take a full-page screenshot of the local clone. Compare side-by-side with the original. Report any visual discrepancies.
 
-Take a full-page screenshot of the local clone via Playwright and report back with a visual
-pass/fail summary.
+## Stop Conditions
 
-## Stop conditions
+- **DONE**: 0 genuine console errors. HTML byte ratio ≥ 99% after normalization. Visual match confirmed. All assets downloaded.
+- **DONE_WITH_CONCERNS**: ≤ 2 non-critical missing assets (e.g. favicon). Byte ratio ≥ 90%. Layout intact. Document the gaps in the manifest.
+- **BLOCKED**: Login wall. CAPTCHA. Aggressive bot detection. Cloudflare "checking your browser." Don't waste time — report and stop.
 
-- **DONE**: 0 genuine console errors, HTML byte ratio ≥ 99%, visual match confirmed
-- **DONE_WITH_CONCERNS**: ≤ 2 minor missing assets (e.g. favicon), byte ratio ≥ 90%, layout intact
-- **BLOCKED**: Original site requires login / CAPTCHA / bot detection that we can't bypass
+## Completion Report
 
-## Output
-
-After completion, tell the user:
-- Local URL: `http://localhost:8765/{page-path}`
-- Clone directory path
+Tell the user:
+- Local URL: `http://localhost:{port}/index.html`
+- Clone directory path (absolute)
 - File count and total size
-- Validation results (byte ratio, CJK preserved, console errors)
-- Any assets that couldn't be downloaded and why
+- Byte ratio after normalization
+- Console errors (initial → final)
+- Any assets that could not be downloaded and why
 
-## Cleanup
+## What NOT to Do
 
-Do NOT delete the clone directory or server — leave them running for the user to inspect.
+- Don't hardcode a specific browser MCP tool name — auto-detect
+- Don't hardcode directory paths — derive from the URL
+- Don't skip Shadow DOM — serialize it
+- Don't inject `<base href>` — it breaks more than it fixes
+- Don't treat CORS errors as real errors — they're expected on localhost
+- Don't assume the first port works — try alternatives
+- Don't stop at "looks right" — verify console errors programmatically
+- Don't redownload the entire page for byte comparison — use the original capture
+- Don't leave temporary files in the clone directory

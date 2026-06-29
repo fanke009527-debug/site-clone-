@@ -1,10 +1,26 @@
 # OS files
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Editor
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Node (if anyone adds server deps later)
+# Node
 node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Site clones (generated output)
+site-clones/
+
+# Logs
+*.log
