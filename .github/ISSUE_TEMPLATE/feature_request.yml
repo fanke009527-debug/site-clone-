@@ -1,0 +1,20 @@
+name: Feature Request
+description: Suggest a new feature for site-clone
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this feature solve?
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should site-clone do?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches?

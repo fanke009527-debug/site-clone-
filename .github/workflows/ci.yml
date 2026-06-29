@@ -1,0 +1,40 @@
+name: Validate SKILL.md
+
+on:
+  pull_request:
+    paths:
+      - "SKILL.md"
+  push:
+    branches: [master]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check SKILL.md exists and is non-empty
+        run: |
+          test -s SKILL.md || { echo "SKILL.md is missing or empty"; exit 1; }
+
+      - name: Check frontmatter
+        run: |
+          head -1 SKILL.md | grep -q "^---$" || { echo "Missing YAML frontmatter"; exit 1; }
+
+      - name: Check README exists
+        run: |
+          test -s README.md || { echo "README.md is missing or empty"; exit 1; }
+
+      - name: Check line count
+        run: |
+          lines=$(wc -l < SKILL.md)
+          if [ "$lines" -gt 300 ]; then
+            echo "SKILL.md is $lines lines (max 300). Reduce."
+            exit 1
+          fi
+          echo "SKILL.md: $lines lines OK"
+
+      - name: Check no hardcoded paths
+        run: |
+          grep -n 'E:\\\\' SKILL.md && { echo "Contains Windows E: paths"; exit 1; } || true
+          grep -n '/home/' SKILL.md && { echo "Contains Linux /home/ paths"; exit 1; } || true

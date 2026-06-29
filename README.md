@@ -78,13 +78,40 @@ No configuration needed — it adapts to whatever is running.
 | obsidianassembly.com/places | Nuxt.js, WebP, lazy routes | 49 | — | 0 | 99% |
 | nudot.com.tw | Chinese, GSAP, Three.js, 12 videos | 77 | 19.2 MB | 0 | Byte-exact |
 
-## Output Structure
+## Project Structure
+
+```
+site-clone/
+├── SKILL.md                  # The skill — Claude reads this and executes
+├── README.md                 # You are here
+├── CLAUDE.md                 # Project-level AI instructions
+├── AGENTS.md                 # Multi-platform agent rules entry point
+├── CHANGELOG.md              # Full version history
+├── CONTRIBUTING.md           # How to contribute
+├── LICENSE                   # MIT
+├── .gitattributes            # Cross-platform line endings
+├── .github/
+│   ├── ISSUE_TEMPLATE/       # Bug report + feature request forms
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   └── workflows/ci.yml      # SKILL.md validation on PR
+├── docs/
+│   ├── examples/
+│   │   ├── obsidianassembly.md  # Nuxt.js case study
+│   │   └── nudot.md             # CJK + multimedia case study
+│   └── research/
+│       └── INSPECTION_GUIDE.md  # How to reverse-engineer any website
+└── scripts/
+    ├── port-finder.js          # Auto-detect available port
+    └── server.template.js      # Verification server (copied into clone output)
+```
+
+## Clone Output
 
 ```
 site-clones/example.com/
 ├── index.html               # Rewritten HTML — all paths relative
 ├── site-manifest.json       # Full inventory with validation results
-├── server.js                # Zero-dependency verification server
+├── server.js                # Generated from scripts/server.template.js
 └── <original path structure preserved>/
     ├── _nuxt/
     ├── images/
@@ -92,31 +119,13 @@ site-clones/example.com/
     └── ...
 ```
 
-## Changelog
+## Learn More
 
-### v2.0.0 — Complete Rewrite
-
-**Philosophy shift:** Claude is now a forensic engineer, not a script executor.
-
-- Removed all hardcoded PowerShell scripts — instruction-driven workflow
-- Browser MCP auto-detection (bouncy / Playwright / Chrome / Puppeteer)
-- Cross-platform: no hardcoded `E:\` paths, output to `./site-clones/`
-- 16 attribute patterns documented as strategy, not as copy-paste code
-- Quoted CSS `url()` handling: `url("/path")` and `url('/path')` now covered
-- `www.` subdomain and protocol-relative URL download support
-- Port auto-detection for verification server (8765 → 8766 → 8767)
-- Byte comparison now uses the original saved capture (no re-fetch)
-- "What NOT to Do" section from real failure cases
-
-### v1.0.2
-- Generic path rewrite patterns (replaced hardcoded `/_nuxt/`, `/images/`, `/fonts/`)
-- Performance API + Shadow DOM + UTF-8 verification
-- 25 MIME types with charset, directory traversal protection
-- CORS/SSL noise filtering in validation loop
-
-### v1.0.1
-- Initial release — 8-step pipeline with Playwright
+- [Inspection Guide](docs/research/INSPECTION_GUIDE.md) — how site-clone reverse-engineers a page
+- [Case Study: obsidianassembly.com](docs/examples/obsidianassembly.md) — Nuxt.js with WebP and lazy routes
+- [Case Study: nudot.com.tw](docs/examples/nudot.md) — Chinese text, GSAP, Three.js, 12 videos
+- [Changelog](CHANGELOG.md) — full version history
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
