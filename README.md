@@ -1,100 +1,109 @@
 # site-clone — Claude Code Website Cloning Skill
 
-> One-shot website cloning skill for Claude Code. Navigate → capture → download → rewrite → validate → done. Produces a fully offline copy of any web page with **zero console errors**.
+> One-shot website cloning skill for Claude Code. Navigate → capture → download → rewrite → validate → done.
+> Produces a fully offline, byte-exact copy of any web page with **zero console errors**.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Skill-blue)](https://claude.ai/code)
+[![Version](https://img.shields.io/badge/version-1.0.2-green)]()
 
 ## What it does
 
-| Step | Action |
-|------|--------|
-| 1. Capture | Navigate to URL with Playwright, record ALL network requests in one pass |
-| 2. Download | Auto-download every asset (CSS, JS, images, fonts) preserving directory structure |
-| 3. Rewrite | Replace absolute paths with relative paths — surgical, domain-scoped only |
-| 4. Validate | Start local server → detect 404s → download missing → iterate to zero errors |
-| 5. Manifest | Generate `site-manifest.json` with full inventory |
+| Step | Action | v1.0.2 |
+|------|--------|--------|
+| 1. Capture | Navigate + Performance API resource list + network requests + Shadow DOM serialization | Enhanced |
+| 2. Setup | Create clone directory tree from extracted URL paths | |
+| 3. Save HTML | Verified UTF-8 encoding (no BOM) with CJK/emoji integrity check | Enhanced |
+| 4. Download | Merged Performance API + network log deduplication; download every asset | Enhanced |
+| 5. Rewrite | **12+ attribute patterns** — generic (not hardcoded) path replacement | **Rewritten** |
+| 6. Compare | Byte-level HTML comparison (runtime attributes stripped for fair comparison) | Enhanced |
+| 7. Server | Zero-dependency Node.js server — 25 MIME types with charset, CORS headers, dir traversal protection | **Fixed** |
+| 8. Validate | Console error detection → filter CORS/SSL noise → download 404s → iterate to zero genuine errors | Enhanced |
+| 9. Manifest | Generate `site-manifest.json` with validation results | Enhanced |
+| 10. Screenshot | Full-page visual comparison | |
 
 ## Installation
 
 ```bash
-# Clone into Claude Code skills directory
-git clone https://github.com/fanke009527-debug/site-clone.git ~/.claude/skills/site-clone
+git clone https://github.com/fanke009527-debug/site-clone-v1.0.2.git ~/.claude/skills/site-clone
 ```
 
 Requires:
 - **Claude Code** CLI
-- **Playwright MCP** (`npx @playwright/mcp`) — installed and connected
+- **Playwright MCP** (`npx @playwright/mcp`) — primary capture engine
 - **Node.js** — for the local verification server
 
 ## Usage
 
-In Claude Code, just say:
+In Claude Code:
 
 ```
 /site-clone https://example.com/landing-page
 ```
 
-Or use natural language:
+Or natural language:
 
 ```
 clone this site: https://example.com
 复刻这个网站
-Save this page offline
+save this page offline
+扒站 https://example.com
+mirror this page
 ```
 
-The skill will:
+## Changelog
 
-1. Open the page and capture all resources
-2. Download everything to `E:\Projects\claude-code\site-clones\{domain}\`
-3. Start a local server at `http://localhost:8765/`
-4. Iterate until console shows 0 errors
-5. Open your browser to the local copy
+### v1.0.2
 
-## How it was built
+**Bugs fixed:**
+- Path rewriting was hardcoded to `/_nuxt/`, `/images/`, `/fonts/` — now uses generic patterns that match any directory structure
+- Server startup used Unix-only `node server.js &` — now cross-platform (Windows + Linux/Mac)
+- Server MIME types missing `charset=utf-8` — added full charset table for all text types (25 MIME types total)
+- Removed dangerous `<base href="./">` injection (broke pages with existing `<base>` tags)
+- Added directory traversal protection to the server
+- Server now handles fragment identifiers (`#`) in URLs
 
-### The problem
+**Added (previously in README but missing from SKILL.md):**
+- Performance API resource list as ground truth (catches CSS `@font-face`, dynamic `import()`, web workers)
+- Shadow DOM serialization for Web Components
+- UTF-8 encoding verification with CJK/emoji integrity check
+- Byte-level HTML comparison with runtime-attribute stripping
+- `srcset` attribute rewriting (comma-separated URLs with width descriptors)
+- Lazy-load attribute rewriting: `data-src`, `data-background`, `data-image`, `data-defer-src`, `data-lazy`, `data-original`, `data-thumb`, `data-poster`, `data-video`, `data-url`
+- `<video>/<audio>` `<source>` and `<track>` rewriting
+- Inline CSS `url()` rewriting
+- `<meta>` Open Graph / Twitter Card URL rewriting
+- JSON-LD `schema.org` URL rewriting
+- `<picture>` `<source srcset>` rewriting
+- Inline `background-image: url()` rewriting
+- Post-rewrite verification scan for remaining absolute URLs
+- CORS/SSL error filtering in validation loop
+- Cross-reference step: Performance API vs network requests
 
-Manually cloning a website with Claude Code required:
+### v1.0.1
+- Initial public release
+- 8-step pipeline: Capture → Setup → Download → Rewrite → Server → Validate → Manifest → Screenshot
+- Two capture modes: Full (Playwright) vs Static (curl)
 
-- Manually enumerating asset URLs from network logs
-- Multiple rounds of downloading (static + dynamic/lazy-loaded assets always missed on first pass)
-- Brittle regex path rewriting
-- Manual console error inspection
-
-A single-page clone took ~10 manual steps with 19 errors on first pass.
-
-### The optimization
-
-The skill replaces that with a 3-pass automated loop:
-
-```
-Pass 1: Playwright navigation → capture ALL network requests → download everything
-Pass 2: Console error inspection → extract 404 URLs → download missing assets
-Pass 3: Re-validate → repeat until 0 errors
-```
-
-Key design decisions:
+## Key design decisions
 
 | Decision | Why |
 |----------|-----|
-| Network log as source of truth | Eliminates manual URL enumeration; captures dynamic JS-loaded assets |
-| Iterative 404 repair | Lazy-loaded route chunks and Vue/React component images only fire after hydration — can't get them on pass 1 |
-| Domain-scoped path rewriting | `src="/images/x.png"` → `src="./images/x.png"` only for target domain; external CDN URLs untouched |
-| `<base href="./">` safety net | Catches edge cases the regex misses |
-| Node.js zero-dependency server | No `npm install` needed — just `node server.js` |
+| **Performance API as ground truth** | `performance.getEntriesByType('resource')` catches CSS @font-face, dynamic imports, workers — everything the browser loaded |
+| Shadow DOM serialization | Web Components and shadow roots are recursively serialized into the HTML |
+| Exhaustive attribute grep (12+ patterns) | Covers `data-src`, `data-image`, `data-defer-src`, `srcset`, `poster`, `track`, `embed`, `object`, inline styles |
+| UTF-8 encoding verification | Double-encoding was the #1 silent bug; CJK/emoji would corrupt without warning |
+| Byte-level HTML comparison | One command catches encoding corruption, truncation, AND missing dynamic content |
+| Generic regex (not hardcoded dirs) | Hardcoded `/_nuxt/` etc. failed for sites using `/assets/`, `/static/`, `/dist/` |
+| CORS error filtering | Localhost always triggers CORS — these are NOT real errors and must be ignored |
+| Directory traversal protection | Prevent `../../../etc/passwd` path injection on the local server |
 
-### First test case
+## Test cases
 
-**Target:** `https://obsidianassembly.com/places` — a Nuxt.js site with custom fonts, WebP images, lazy-loaded route chunks.
-
-| Metric | Pass 1 | Pass 2 | Final |
-|--------|--------|--------|-------|
-| Files downloaded | 28 | +19 | **49** |
-| Console errors | 19 | 0 | **0** |
-| Missing assets | 19 | 0 | **0** |
-
-Only permanent failure: `/videos/walk-through.mp4` — 404 on the original server too.
+| Site | Type | Files | Size | Console Errors | HTML Match |
+|------|------|-------|------|----------------|------------|
+| obsidianassembly.com/places | Nuxt.js, WebP, lazy routes | 49 | — | 0 | 99% |
+| nudot.com.tw | Chinese, GSAP, Three.js, 12 videos | 77 | 19.2 MB | 0 | Byte-exact |
 
 ## File structure
 
@@ -102,31 +111,36 @@ Only permanent failure: `/videos/walk-through.mp4` — 404 on the original serve
 site-clone/
 ├── SKILL.md              # The skill definition (Claude Code loads this)
 ├── README.md             # This file
-└── LICENSE               # MIT
+├── LICENSE               # MIT
+└── .gitignore
 ```
 
 After running, the clone output looks like:
 
 ```
 site-clones/example.com/
-├── index.html            # Rewritten HTML with relative paths
+├── index.html            # Rewritten HTML — byte-exact match after normalization
 ├── server.js             # Zero-dependency verification server
-├── site-manifest.json    # Full inventory
-├── _nuxt/                # JS/CSS bundles (preserved paths)
-├── images/               # All images (preserved paths)
-├── fonts/                # Font files
+├── site-manifest.json    # Full inventory with validation results
+├── _nuxt/                # Original path structure preserved
+├── images/
+├── fonts/
 └── ...
 ```
 
-## Skills that pair well with this
+## Compatibility
 
-- **[gstack browse](https://github.com/garrytan/gstack)** — Archive single pages as MHTML. site-clone is more thorough (multi-pass, zero-error guarantee) but gstack is faster for quick snapshots.
-- **[web-scraper](https://github.com/yfe404/web-scraper)** — Adaptive 6-phase scraping with anti-bot detection. Use web-scraper for protected sites; use site-clone for clean public pages.
-- **[browserbase/skills](https://github.com/browserbase/skills)** — 11 browser automation skills. site-clone is purpose-built for cloning; browserbase is a broader toolkit.
+| AI Tool | Mode | Quality |
+|---------|------|---------|
+| **Claude Code** | Full (Playwright + Performance API) | Byte-exact match |
+| **Codex CLI** | Static (curl + regex) | Functional, no JS rendering |
+| **Cursor** | Static (curl + regex) | Functional, no JS rendering |
+| **aider / terminal AI** | Static (curl + regex) | Functional, no JS rendering |
+
+For non-Claude-Code tools, assets loaded via JS (dynamic imports, Shadow DOM, CSS fonts, Web Workers) will be missing.
 
 ## Prior art
 
-This skill was inspired by:
 - HTTrack — the classic website copier, but CLI-native and Claude Code-integrated
 - gstack browse `archive` command — MHTML single-page snapshots
 - Playwright's network interception API — the core capture mechanism
